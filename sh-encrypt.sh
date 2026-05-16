@@ -30,6 +30,7 @@
 #                      files to be encrypted (providing there is sufficient 
 #                      disk space) - MT
 #                    - Display errors from both cat and openssl - MT
+#  16 May 26         - Overwrite original file with random data - MT
 #
 #  ToDo              - Force overwriting.
 #                    - Allow number of iterations to be changed.
@@ -206,6 +207,8 @@ else
 
             if [ $_status -eq 0 ]; then
                if confirm "Overwrite existing file"; then  # Confirm deletion of original file.
+                  _blocks=$(($(ls -alis ${_filename}| cut -f 7 -d ' ')/ 512 + 1))  
+                  dd if=/dev/urandom of="$_filename" conv=notrunc bs=512 count="$_blocks" >/dev/null 2>&1  # Not really secure but quicker than wipe.. 
                   mv "$_scratch" "$_filename"  # Replace the original file with the temporary copy.
                   _status=$?
                   if [ $_status -ne 0 ]; then
