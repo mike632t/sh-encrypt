@@ -4,7 +4,7 @@
 #
 #  Encrypts a file using openssh.
 #
-#  Requires bash 
+#  Requires bash + sed + grep 
 #  
 #
 #  This  program is free software: you can redistribute it and/or modify it
@@ -35,11 +35,18 @@
 #                    - Do not overwrite unless scratch file exists - MT
 #                    - Only print first line of an error message - MT
 #                    - Added support for legacy systems - MT
+#  17 May            - Checks openssl version and automatically uses legacy 
+#                      options if required - MT
+#                    - Fixed use of dd on legacy systems - MT
+#                    - Check for command line errors and exit - MT
+#                    - Added option to display the version - MT
 #
-#  ToDo              - Allow user to overwrite the existing file.
+#  ToDo              - Fix bug in command line parsing (should exit).
+#                    - Allow user to overwrite the existing file.
 #                    
 #
 
+VERSION=0.1.14
 CONSOLE=1  # Force console output. 
 
 #
@@ -170,10 +177,11 @@ while [ $# -gt 0 ] && [ $_status -eq 0 ]; do  # Scan command line arguments.
       printf "Encrypts FILES in place overwriting the existing file.\n\n"
       printf "  -d, --decrypt            decrypt input file/stream\n"
       printf "  -p, --password PASSWORD  specify password\n"
-      printf "         --legacy          use backward compatible settings\n"
-      printf "         --help            show this help and exit\n\n"
+      printf "      --legacy             use backward compatible settings\n"
+      printf "      --help               show this help and exit\n\n"
+      printf "      --version            show version and exit\n\n"
       printf "Reads from stdin and outputs to stdout if no files specified.\n\n"
-      exit 0
+      _status=1
       ;;
    --decrypt|-d)  # Select decryption option.
       _decrypt="-d"
@@ -183,11 +191,20 @@ while [ $# -gt 0 ] && [ $_status -eq 0 ]; do  # Scan command line arguments.
       _options="$_legacy"
       shift 1
       ;;
+   --version)  # Select decryption option.
+      printf "%s: Version %s\n" $0 $VERSION
+      printf "Copyright(C) 2026 MT\n"
+      printf "License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\n"
+      printf "This is free software: you are free to change and redistribute it.\n"
+      printf "There is NO WARRANTY, to the extent permitted by law.\n"
+      _status=1
+      ;;
    --password|-p)  # An example of an option with a parameter.
       case $2 in
       -*|"")  # Blank or another qualifier.
          error "password not specified."
-         _status=1 ;;
+         _status=1
+         ;;
       *)
          _password="$2"
          shift 2
@@ -206,53 +223,60 @@ while [ $# -gt 0 ] && [ $_status -eq 0 ]; do  # Scan command line arguments.
    esac
 done
 
-set -o pipefail  #  Ensure that the status reflects any errors in a pipeline (returns first error status).
+if [ $_status -eq 0 ]; then  # Check there were no errors on the command line.
+   _version=$(openssl version | sed -n 's/[^0-9]*\([0-9]\{1,\}\(\.[0-9]\{1,\}\)\{1,\}\).*/\1/p')  # Get openssl version number.
+   if ! check_version 1.1.0 $_version; then  # Check openssl version meets requirements.
+      _options="$_legacy"  # Use legacy options if it doesn't.
+   fi
 
-if [ -z "$_password" ]; then  # If password not specified on the command line.
-   _password=$(inquire "Password")
-fi
+   set -o pipefail  #  Ensure that the status reflects any errors in a pipeline (returns first error status).
 
-if [ -z "$_password" ]; then
-   error "No password entered!"
-   _status=1
-   printf "\n"
-else
-   _count=0
-   while [ $_count -lt ${#_args[@]} ] && [ "$_status" = 0 ]; do
-      _filename="${_args[$_count]}"
-      if [ -n "$_filename" ]; then
-         _scratch=`mktemp` || _status=1  # Create a temporary file.
-         if [ "$_status" -eq 0 ]; then
-            (cat "$_filename" 2>&1 >&3 3>&- | sed "1s|^cat: |$0: |" >&2 3>&-) 3>&1 | \
-            (openssl enc $_options -k "$_password" $_decrypt 2>&1 >&3 3>&- | sed "1s|^|$0: |" | sed -n 1,2p | sed "s|error reading input file|& (is it plain text)|" >&2 3>&-) 3>&1 | cat > "$_scratch"  # Encrypt or decrypt file rewriting an error messages.
-            _status=$?
-            if [ $_status -eq 0 ]; then
-               if confirm "Overwrite existing file"; then  # Confirm deletion of original file.
-                  if [ -e $_scratch ]; then  # Check scratch file exists (don't overwrite original).
-                     _blocks=$(($(ls -alis ${_filename}| cut -f 7 -d ' ')/ 512 + 1))  
-                     dd if=/dev/urandom of="$_filename" conv=notrunc bs=512 count="$_blocks" status=none 2>&1 >/dev/null | sed "1s|^dd: |$0: |" # Not really secure but quicker than wipe.. 
-                     _status=$?
-                     if [ $_status -eq 0 ]; then
-                        mv "$_scratch" "$_filename" 2>&1 >/dev/null | sed "1s|^mv: |**$0: |"  # Replace the original file with the temporary copy.
+   if [ -z "$_password" ]; then  # If password not specified on the command line.
+      _password=$(inquire "Password")
+   fi
+
+   if [ -z "$_password" ]; then
+      error "No password entered!"
+      _status=1
+      printf "\n"
+   else
+      _count=0
+      while [ $_count -lt ${#_args[@]} ] && [ "$_status" = 0 ]; do
+         _filename="${_args[$_count]}"
+         if [ -n "$_filename" ]; then
+            _scratch=`mktemp` || _status=1  # Create a temporary file.
+            if [ "$_status" -eq 0 ]; then
+               (cat "$_filename" 2>&1 >&3 3>&- | sed "1s|^cat: |$0: |" >&2 3>&-) 3>&1 | \
+               (openssl enc $_options -k "$_password" $_decrypt 2>&1 >&3 3>&- | sed "1s|^|$0: |" | sed -n 1,2p | sed "s|error reading input file|& (is it plain text)|" >&2 3>&-) 3>&1 | cat > "$_scratch"  # Encrypt or decrypt file rewriting an error messages.
+               _status=$?
+               if [ $_status -eq 0 ]; then
+                  if confirm "Overwrite existing file"; then  # Confirm deletion of original file.
+                     if [ -e $_scratch ]; then  # Check scratch file exists (don't overwrite the original if there is nothing to replace it!).
+                        _blocks=$(($(ls -alis "$_filename" | cut -f 7 -d ' ')/ 512 + 1))  
+                        (dd if=/dev/urandom of="$_filename" conv=notrunc bs=512 count="$_blocks" 2>&1) | grep "dd:" || true | sed "s|^dd: ||"  # Ignore error from grep if nothing matched.
                         _status=$?
+                        if [ $_status -eq 0 ]; then
+                           mv "$_scratch" "$_filename" 2>&1 >/dev/null | sed "1s|^mv: |$0: |"  # Replace the original file with the temporary copy.
+                           _status=$?
+                        fi
+                     else
+                        _status=1
+                        error "cannot stat '$_scratch': No such file or directory"
                      fi
-                  else
-                     _status=1
-                     error "cannot stat '$_scratch': No such file or directory"
                   fi
                fi
+               if [ -n "$_scratch" ] && [ -f "$_scratch" ]; then  # Remove temporary file if it exists.
+                  rm -f "$_scratch" 2>&1 >/dev/null | sed "1s|^rm: |$0: |" 
+               fi
             fi
-            if [ -n "$_scratch" ] && [ -f "$_scratch" ]; then  # Remove temporary file if it exists.
-               rm -f "$_scratch" 2>&1 >/dev/null | sed "1s|^rm: |$0: |" 
-            fi
+         else
+            (cat 2>&1 >&3 3>&- | sed "1s|^cat: |$0: |" >&2 3>&-) 3>&1 | \
+            (openssl enc $_options -k "$_password" $_decrypt 2>&1 >&3 3>&- | sed "1s|^|\n$0: |" | sed -n 1,2p | sed "s|error reading input file|& (is it plain text)|" >&2 3>&-) 3>&1 | cat
+            _status=$?
          fi
-      else
-         (cat 2>&1 >&3 3>&- | sed "1s|^cat: |$0: |" >&2 3>&-) 3>&1 | \
-         (openssl enc $_options -k "$_password" $_decrypt 2>&1 >&3 3>&- | sed "1s|^|\n$0: |" | sed -n 1,2p | sed "s|error reading input file|& (is it plain text)|" >&2 3>&-) 3>&1 | cat
-         _status=$?
-      fi
-      ((_count++))
-   done
+         ((_count++))
+      done
+   fi
 fi
 
 exit "$_status"  # Exit with the _status code.
