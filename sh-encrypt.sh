@@ -38,8 +38,10 @@
 #  17 May            - Checks openssl version and automatically uses legacy 
 #                      options if required - MT
 #                    - Fixed use of dd on legacy systems - MT
-#                    - Check for command line errors and exit - MT
+#                    - Check for command line errors before continuing - MT
 #                    - Added option to display the version - MT
+#                    - Made check_version() POSIX compliant for portability
+#                      to other systems - MT
 #
 #  ToDo              - Fix bug in command line parsing (should exit).
 #                    - Allow user to overwrite the existing file.
@@ -57,7 +59,7 @@ CONSOLE=1  # Force console output.
 
 error() {
    local _command=""
-   
+
    _command=$(command -v zenity) >/dev/null 2>&1
    if [ -x "$_command" ] && [ $CONSOLE -eq 0 ]; then  # Use graphical message box.
       $_command --error --title="Error" --text="${1:-"Unknown Error"}\n\t\t\t\t\t\t\t\t\t\t\t\t" # Pad text.
@@ -75,7 +77,7 @@ error() {
 #  Returns true if user enters Yes or selects OK and false otherwise.
 #
 
-function confirm {
+confirm {
    local _prompt="$@"  # Get message text.
    local _response=""
    
@@ -111,7 +113,7 @@ function confirm {
 #  Prints a message  and waits for the user to enter some text.
 #
 
-function inquire {
+inquire {
    local _prompt="$@"  # Get prompt.
    local _password=""
    local _command=""
@@ -128,7 +130,9 @@ function inquire {
 }
 
 #
-#  check_version REQUIRED CURRENT
+#  compare_versions REQUIRED CURRENT
+#
+#  POSIX compliant.
 #
 #  Splits up version numbers and compares them.  
 #
@@ -136,27 +140,26 @@ function inquire {
 #  version.
 #
 
-check_version() {
-   local _required=$(printf "%s" "$1" | tr . ' ')  # Convert dots to spaces (so we can iterate over each number)
-   local _version=$(printf "%s" "$2" | tr . ' ')
-   set -- $_required  # Convert required version into positional parameters
-   for _value in $_version; do  # Loop over each value in the version number 
+compare_versions() {
+   _required=`printf "%s" "$1" | tr . ' '`  # Convert dots to spaces (so we can iterate over each number).
+   _version=`printf "%s" "$2" | tr . ' '`
+   set -- $_required  # Convert required version into positional parameters.
+   for _value in $_version; do  # Loop over each value in the version number .
       _min=$1
-      if [ -z "$_min" ]; then _min=0; fi  # Replace any missing value with zeros
-      if [ "$_value" -gt "$_min" ]; then  # If version is newer than required version return true
+      if [ -z "$_min" ]; then _min=0; fi  # Replace any missing value with zeros.
+      if [ "$_value" -gt "$_min" ]; then  # If version is newer than required version return true.
          return 0
-      elif [ "$_value" -lt "$_min" ]; then  # If version is older than required version return false
+      elif [ "$_value" -lt "$_min" ]; then  # If version is older than required version return false.
          return 1
       fi
-      shift  #  Everything the same so far check next values
+      shift  #  Everything the same so far check next values.
    done
 
    for _min in "$@"; do
-      if [ "$_min" -gt 0 ]; then  # If any additional minor versions are greater then zero return false
+      if [ "$_min" -gt 0 ]; then  # If any additional minor versions are greater then zero return false.
          return 1
       fi
    done
-   
    return 0
 }
 
