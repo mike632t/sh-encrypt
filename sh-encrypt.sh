@@ -31,9 +31,13 @@
 #                      disk space) - MT
 #                    - Display errors from both cat and openssl - MT
 #  16 May 26         - Overwrite original file with random data - MT
+#                    - Improved error handling - MT
+#                    - Do not overwrite unless scratch file exists - MT
+#                    - Only print first line of an error message - MT
+#                    - Added support for legacy systems - MT
 #
-#  ToDo              - Force overwriting.
-#                    - Allow number of iterations to be changed.
+#  ToDo              - Allow user to overwrite the existing file.
+#                    
 #
 
 CONSOLE=1  # Force console output. 
@@ -46,6 +50,7 @@ CONSOLE=1  # Force console output.
 
 error() {
    local _command=""
+   
    _command=$(command -v zenity) >/dev/null 2>&1
    if [ -x "$_command" ] && [ $CONSOLE -eq 0 ]; then  # Use graphical message box.
       $_command --error --title="Error" --text="${1:-"Unknown Error"}\n\t\t\t\t\t\t\t\t\t\t\t\t" # Pad text.
@@ -66,7 +71,8 @@ error() {
 function confirm {
    local _prompt="$@"  # Get message text.
    local _response=""
-   [ -z "$_prompt" ] && _prompt="Continue"  # Default text.
+   
+   if [ -z "$_prompt" ]; then _prompt="Continue"; fi  # Default text.
    _command=$(command -v zenity) >/dev/null 2>&1
    if [ -x "$_command" ] && [ $CONSOLE -eq 0 ]; then # Use graphical message box.   
       if zenity --question --title="" --text="$_prompt"; then
@@ -76,13 +82,13 @@ function confirm {
       fi
    else
       while true; do
-         printf '%s [y/n] ? ' "$_prompt" >/dev/tty  # Display prompt on console
+         printf '%s [y/N] ? ' "$_prompt" >/dev/tty  # Display prompt on console
          if ! read -r _response </dev/tty ; then printf '\n'; return 1; fi  # Return false on EOF (don't use timeout as it is not portable.
          case "$_response" in
             [Yy][e][s]|[Y][E][S]|[Yy])  # Yes or Y.
                return 0
                ;;
-            [Nn][o]|[N][O]|[Nn])  # No or N.
+            [Nn][o]|[N][O]|[Nn]|"")  # No, N or blank  (Default to N)
                return 1
                ;;
             *)  # Anything else (including a blank) is invalid.
@@ -102,8 +108,8 @@ function inquire {
    local _prompt="$@"  # Get prompt.
    local _password=""
    local _command=""
-   [ -z "$_prompt" ] && _prompt="Password"  # Use default prompt of not specified.
-
+   
+   if [ -z "$_prompt" ]; then _prompt="Password"; fi # Use default prompt of not specified.
    _command=$(command -v zenity 2>/dev/null || true)
    if [ -x "$_command" ] && [ $CONSOLE -eq 0 ]; then # Use graphical message box.
       _password=$(zenity --password --title="Enter Password")
@@ -114,11 +120,45 @@ function inquire {
    printf "%s" "$_password"
 }
 
+#
+#  check_version REQUIRED CURRENT
+#
+#  Splits up version numbers and compares them.  
+#
+#  Returns true if current version is greater then or equal to the required 
+#  version.
+#
+
+check_version() {
+   local _required=$(printf "%s" "$1" | tr . ' ')  # Convert dots to spaces (so we can iterate over each number)
+   local _version=$(printf "%s" "$2" | tr . ' ')
+   set -- $_required  # Convert required version into positional parameters
+   for _value in $_version; do  # Loop over each value in the version number 
+      _min=$1
+      if [ -z "$_min" ]; then _min=0; fi  # Replace any missing value with zeros
+      if [ "$_value" -gt "$_min" ]; then  # If version is newer than required version return true
+         return 0
+      elif [ "$_value" -lt "$_min" ]; then  # If version is older than required version return false
+         return 1
+      fi
+      shift  #  Everything the same so far check next values
+   done
+
+   for _min in "$@"; do
+      if [ "$_min" -gt 0 ]; then  # If any additional minor versions are greater then zero return false
+         return 1
+      fi
+   done
+   
+   return 0
+}
 
 
 _status=0
 _count=0
-_decrypt=""
+_options="-aes-256-cbc -pbkdf2 -iter 200000 -md sha512 -salt -base64 "  # Default options for modern openssl implementations.
+_legacy="-aes-256-cbc -salt -md sha1 -base64 "  # Options for legacy systems.
+_decrypt="-e"  # Encrypt by default.
 _password=""
 _scratch=""
 _args=""
@@ -130,6 +170,7 @@ while [ $# -gt 0 ] && [ $_status -eq 0 ]; do  # Scan command line arguments.
       printf "Encrypts FILES in place overwriting the existing file.\n\n"
       printf "  -d, --decrypt            decrypt input file/stream\n"
       printf "  -p, --password PASSWORD  specify password\n"
+      printf "         --legacy          use backward compatible settings\n"
       printf "         --help            show this help and exit\n\n"
       printf "Reads from stdin and outputs to stdout if no files specified.\n\n"
       exit 0
@@ -138,26 +179,10 @@ while [ $# -gt 0 ] && [ $_status -eq 0 ]; do  # Scan command line arguments.
       _decrypt="-d"
       shift 1
       ;;
-#   --iterations|-i)  # An example of an option with a parameter.
-#      case $2 in
-#      -*|"")  # Blank or another qualifier.
-#         error "number of iterations not specified."
-#         _status=1
-#         ;;
-#      *)
-#         case $2 in  # Check that argument is an integer.
-#         ''|*[!0-9]*) 
-#            error "invalid $1 argument '$2'"
-#            _status=1
-#            ;;
-#         *) 
-#            _iterations=$2
-#            ;;
-#         esac
-#         shift 2
-#         ;;
-#      esac 
-#      ;;
+   --legacy)  # Select decryption option.
+      _options="$_legacy"
+      shift 1
+      ;;
    --password|-p)  # An example of an option with a parameter.
       case $2 in
       -*|"")  # Blank or another qualifier.
@@ -190,7 +215,7 @@ fi
 if [ -z "$_password" ]; then
    error "No password entered!"
    _status=1
-   echo ""
+   printf "\n"
 else
    _count=0
    while [ $_count -lt ${#_args[@]} ] && [ "$_status" = 0 ]; do
@@ -198,36 +223,33 @@ else
       if [ -n "$_filename" ]; then
          _scratch=`mktemp` || _status=1  # Create a temporary file.
          if [ "$_status" -eq 0 ]; then
-
-            #(cat "$_filename" 2>&1 >&3 3>&- | sed "s|^cat: |$0: |" >&2 3>&-) 3>&1 | openssl enc -aes-256-cbc -base64 -iter 7 -k "$_password" $_decrypt > "$_scratch"  # Encrypt or decrypt file and write output to temporary file.
-            
-            (cat "$_filename" 2>&1 >&3 3>&- | sed "s|^cat: |$0: |" >&2 3>&-) 3>&1 | \
-            (openssl enc -aes-256-cbc -base64 -iter 7 -k "$_password" $_decrypt 2>&1 >&3 3>&- | sed "s|^|$0: |" >&2 3>&-) 3>&1 | cat > "$_scratch"  # Encrypt or decrypt file rewriting an error messages.
+            (cat "$_filename" 2>&1 >&3 3>&- | sed "1s|^cat: |$0: |" >&2 3>&-) 3>&1 | \
+            (openssl enc $_options -k "$_password" $_decrypt 2>&1 >&3 3>&- | sed "1s|^|$0: |" | sed -n 1,2p | sed "s|error reading input file|& (is it plain text)|" >&2 3>&-) 3>&1 | cat > "$_scratch"  # Encrypt or decrypt file rewriting an error messages.
             _status=$?
-
             if [ $_status -eq 0 ]; then
                if confirm "Overwrite existing file"; then  # Confirm deletion of original file.
-                  _blocks=$(($(ls -alis ${_filename}| cut -f 7 -d ' ')/ 512 + 1))  
-                  dd if=/dev/urandom of="$_filename" conv=notrunc bs=512 count="$_blocks" >/dev/null 2>&1  # Not really secure but quicker than wipe.. 
-                  mv "$_scratch" "$_filename"  # Replace the original file with the temporary copy.
-                  _status=$?
-                  if [ $_status -ne 0 ]; then
-                     error "Unable to overwrite '$_filename'"
+                  if [ -e $_scratch ]; then  # Check scratch file exists (don't overwrite original).
+                     _blocks=$(($(ls -alis ${_filename}| cut -f 7 -d ' ')/ 512 + 1))  
+                     dd if=/dev/urandom of="$_filename" conv=notrunc bs=512 count="$_blocks" status=none 2>&1 >/dev/null | sed "1s|^dd: |$0: |" # Not really secure but quicker than wipe.. 
+                     _status=$?
+                     if [ $_status -eq 0 ]; then
+                        mv "$_scratch" "$_filename" 2>&1 >/dev/null | sed "1s|^mv: |**$0: |"  # Replace the original file with the temporary copy.
+                        _status=$?
+                     fi
+                  else
+                     _status=1
+                     error "cannot stat '$_scratch': No such file or directory"
                   fi
                fi
             fi
             if [ -n "$_scratch" ] && [ -f "$_scratch" ]; then  # Remove temporary file if it exists.
-               rm -f "$_scratch"; 
+               rm -f "$_scratch" 2>&1 >/dev/null | sed "1s|^rm: |$0: |" 
             fi
          fi
       else
-
-         #(cat 2>&1 >&3 3>&- | sed "s|^cat: |$0: |" >&2 3>&-) 3>&1 | openssl enc -aes-256-cbc -base64 -iter 7 -k "$_password" $_decrypt  # Encrypt or decrypt input stream
-
-         (cat 2>&1 >&3 3>&- | sed "s|^cat: |$0: |" >&2 3>&-) 3>&1 | \
-         (openssl enc -aes-256-cbc -base64 -iter 7 -k "$_password" $_decrypt 2>&1 >&3 3>&- | sed "s|^|$0: |" >&2 3>&-) 3>&1 | cat
+         (cat 2>&1 >&3 3>&- | sed "1s|^cat: |$0: |" >&2 3>&-) 3>&1 | \
+         (openssl enc $_options -k "$_password" $_decrypt 2>&1 >&3 3>&- | sed "1s|^|\n$0: |" | sed -n 1,2p | sed "s|error reading input file|& (is it plain text)|" >&2 3>&-) 3>&1 | cat
          _status=$?
-         
       fi
       ((_count++))
    done
