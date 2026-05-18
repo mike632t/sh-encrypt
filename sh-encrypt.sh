@@ -77,7 +77,7 @@ error() {
 #  Returns true if user enters Yes or selects OK and false otherwise.
 #
 
-confirm {
+confirm() {
    local _prompt="$@"  # Get message text.
    local _response=""
    
@@ -113,7 +113,7 @@ confirm {
 #  Prints a message  and waits for the user to enter some text.
 #
 
-inquire {
+inquire() {
    local _prompt="$@"  # Get prompt.
    local _password=""
    local _command=""
@@ -228,7 +228,7 @@ done
 
 if [ $_status -eq 0 ]; then  # Check there were no errors on the command line.
    _version=$(openssl version | sed -n 's/[^0-9]*\([0-9]\{1,\}\(\.[0-9]\{1,\}\)\{1,\}\).*/\1/p')  # Get openssl version number.
-   if ! check_version 1.1.0 $_version; then  # Check openssl version meets requirements.
+   if ! compare_versions 1.1.0 $_version; then  # Check openssl version meets requirements.
       _options="$_legacy"  # Use legacy options if it doesn't.
    fi
 
