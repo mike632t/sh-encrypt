@@ -48,13 +48,15 @@
 #                      place - MT
 #             (0019) - User can force files to be overwritten without being
 #                      prompted to confirm - MT
+#                    - File size and temporary filename generation modified
+#                      to make them more portable - MT
 # 
 #
 #  ToDo              - 
 #                    
 #
 
-VERSION=0.2.0019
+VERSION=0.2.0020
 CONSOLE=1  # Force console output. 
 
 #
@@ -251,6 +253,8 @@ if [ $_status -eq 0 ]; then  # Check there were no errors on the command line.
    fi
 
    set -o pipefail  #  Ensure that the status reflects any errors in a pipeline (returns first error status).
+   
+   if [ -n "$TMPDIR" ]; then _tmp="$TMPDIR"; else _tmp="/tmp"; fi
 
    if [ -z "$_password" ]; then  # If password not specified on the command line.
       _password=$(inquire "Password")
@@ -270,7 +274,8 @@ if [ $_status -eq 0 ]; then  # Check there were no errors on the command line.
          _filename="${_args[$_count]}"
          if [ -n "$_filename" ]; then
             if [ $_overwrite -eq 1 ]; then
-               _scratch=`mktemp` || _status=1  # Create a temporary file.
+               #_scratch=`mktemp` || _status=1  # Create a temporary file.
+               _scratch=$(mktemp "$_tmp/tmpfile.XXXXXX")  # Create a temporary file.
                if [ "$_status" -eq 0 ]; then
                   (cat "$_filename" 2>&1 >&3 3>&- | sed "1s|^cat: |$0: |" >&2 3>&-) 3>&1 | \
                   (openssl enc $_options -k "$_password" $_mode 2>&1 >&3 3>&- | sed "1s|^|$0: |" | sed -n 1,2p | sed "s|error reading input file|& (is it plain text)|" >&2 3>&-) 3>&1 | cat > "$_scratch"  # Encrypt or decrypt file rewriting an error messages.
@@ -279,7 +284,9 @@ if [ $_status -eq 0 ]; then  # Check there were no errors on the command line.
                      if [ $_force -eq 1 ] || confirm "Overwrite existing file(s)"; then  # Confirm deletion of original file.
                         _force=1  # Don't prompt again. 
                         if [ -e $_scratch ]; then  # Check scratch file exists (don't overwrite the original if there is nothing to replace it!).
-                           _blocks=$(($(ls -alis "$_filename" | cut -f 7 -d ' ')/ 512 + 1))  
+                           #_blocks=$(($(ls -alis "$_filename" | cut -f 7 -d ' ')/ 512 + 1))  
+                           _filesize=`( wc -c < "$_filename" )`  # Simpler and more portable 
+                           _blocks=$(( (_filesize + 511) / 512 ))  # Arithmetic expression
                            (dd if=/dev/urandom of="$_filename" conv=notrunc bs=512 count="$_blocks" 2>&1) | grep "dd:" || true | sed "s|^dd: ||"  # Ignore error from grep if nothing matched.
                            _status=$?
                            if [ $_status -eq 0 ]; then
