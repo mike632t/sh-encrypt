@@ -22,7 +22,7 @@
 #  devices if your USB to serial adapter uses a different device name.
 #
 #
-#  10 May 26         - Initial version - MT
+#  10 May 26   0.1   - Initial version - MT
 #                    - Improved error handler - MT
 #  14 May 26         - Prompt before overwriting existing files - MT
 #                    - Optionally use a graphical interface - MT
@@ -35,20 +35,26 @@
 #                    - Do not overwrite unless scratch file exists - MT
 #                    - Only print first line of an error message - MT
 #                    - Added support for legacy systems - MT
-#  17 May            - Checks openssl version and automatically uses legacy 
+#  17 May 26         - Checks openssl version and automatically uses legacy 
 #                      options if required - MT
 #                    - Fixed use of dd on legacy systems - MT
 #                    - Check for command line errors before continuing - MT
 #                    - Added option to display the version - MT
 #                    - Made check_version() POSIX compliant for portability
 #                      to other systems - MT
+#  18 May 26   0.2   - Changed the default behaviour when decrypting a file 
+#                      to write the plaintext to the console - MT
+#                    - Added an option to allow the user to modify files in 
+#                      place - MT
+#             (0019) - User can force files to be overwritten without being
+#                      prompted to confirm - MT
+# 
 #
-#  ToDo              - Fix bug in command line parsing (should exit).
-#                    - Allow user to overwrite the existing file.
+#  ToDo              - 
 #                    
 #
 
-VERSION=0.1.14
+VERSION=0.2.0019
 CONSOLE=1  # Force console output. 
 
 #
@@ -166,9 +172,11 @@ compare_versions() {
 
 _status=0
 _count=0
+_overwrite=0
+_force=0
 _options="-aes-256-cbc -pbkdf2 -iter 200000 -md sha512 -salt -base64 "  # Default options for modern openssl implementations.
 _legacy="-aes-256-cbc -salt -md sha1 -base64 "  # Options for legacy systems.
-_decrypt="-e"  # Encrypt by default.
+_mode="-e"  # Encrypt by default.
 _password=""
 _scratch=""
 _args=""
@@ -179,15 +187,25 @@ while [ $# -gt 0 ] && [ $_status -eq 0 ]; do  # Scan command line arguments.
       printf "Usage: $0 [OPTION]... [FILE...]\n"
       printf "Encrypts FILES in place overwriting the existing file.\n\n"
       printf "  -d, --decrypt            decrypt input file/stream\n"
+      printf "  -f, --force              overwrite without prompting\n"
+      printf "  -i, --inplace            modify file in place\n"
       printf "  -p, --password PASSWORD  specify password\n"
       printf "      --legacy             use backward compatible settings\n"
       printf "      --help               show this help and exit\n\n"
       printf "      --version            show version and exit\n\n"
-      printf "Reads from stdin and outputs to stdout if no files specified.\n\n"
+      printf "Reads from stdin if no files specified and outputs to stdout.\n\n"
       _status=1
       ;;
    --decrypt|-d)  # Select decryption option.
-      _decrypt="-d"
+      _mode="-d"
+      shift 1
+      ;;
+   --force|-f)  # Select decryption option.
+      _force=1
+      shift 1
+      ;;
+   --inplace|-i)  # Overwrite existing file 
+      _overwrite=1
       shift 1
       ;;
    --legacy)  # Select decryption option.
@@ -237,6 +255,10 @@ if [ $_status -eq 0 ]; then  # Check there were no errors on the command line.
    if [ -z "$_password" ]; then  # If password not specified on the command line.
       _password=$(inquire "Password")
    fi
+   
+   if [ "$_mode" = "-e" ]; then  # Encryption implies overwrite 
+      _overwrite=1
+   fi
 
    if [ -z "$_password" ]; then
       error "No password entered!"
@@ -247,34 +269,41 @@ if [ $_status -eq 0 ]; then  # Check there were no errors on the command line.
       while [ $_count -lt ${#_args[@]} ] && [ "$_status" = 0 ]; do
          _filename="${_args[$_count]}"
          if [ -n "$_filename" ]; then
-            _scratch=`mktemp` || _status=1  # Create a temporary file.
-            if [ "$_status" -eq 0 ]; then
-               (cat "$_filename" 2>&1 >&3 3>&- | sed "1s|^cat: |$0: |" >&2 3>&-) 3>&1 | \
-               (openssl enc $_options -k "$_password" $_decrypt 2>&1 >&3 3>&- | sed "1s|^|$0: |" | sed -n 1,2p | sed "s|error reading input file|& (is it plain text)|" >&2 3>&-) 3>&1 | cat > "$_scratch"  # Encrypt or decrypt file rewriting an error messages.
-               _status=$?
-               if [ $_status -eq 0 ]; then
-                  if confirm "Overwrite existing file"; then  # Confirm deletion of original file.
-                     if [ -e $_scratch ]; then  # Check scratch file exists (don't overwrite the original if there is nothing to replace it!).
-                        _blocks=$(($(ls -alis "$_filename" | cut -f 7 -d ' ')/ 512 + 1))  
-                        (dd if=/dev/urandom of="$_filename" conv=notrunc bs=512 count="$_blocks" 2>&1) | grep "dd:" || true | sed "s|^dd: ||"  # Ignore error from grep if nothing matched.
-                        _status=$?
-                        if [ $_status -eq 0 ]; then
-                           mv "$_scratch" "$_filename" 2>&1 >/dev/null | sed "1s|^mv: |$0: |"  # Replace the original file with the temporary copy.
+            if [ $_overwrite -eq 1 ]; then
+               _scratch=`mktemp` || _status=1  # Create a temporary file.
+               if [ "$_status" -eq 0 ]; then
+                  (cat "$_filename" 2>&1 >&3 3>&- | sed "1s|^cat: |$0: |" >&2 3>&-) 3>&1 | \
+                  (openssl enc $_options -k "$_password" $_mode 2>&1 >&3 3>&- | sed "1s|^|$0: |" | sed -n 1,2p | sed "s|error reading input file|& (is it plain text)|" >&2 3>&-) 3>&1 | cat > "$_scratch"  # Encrypt or decrypt file rewriting an error messages.
+                  _status=$?
+                  if [ $_status -eq 0 ]; then
+                     if [ $_force -eq 1 ] || confirm "Overwrite existing file(s)"; then  # Confirm deletion of original file.
+                        _force=1  # Don't prompt again. 
+                        if [ -e $_scratch ]; then  # Check scratch file exists (don't overwrite the original if there is nothing to replace it!).
+                           _blocks=$(($(ls -alis "$_filename" | cut -f 7 -d ' ')/ 512 + 1))  
+                           (dd if=/dev/urandom of="$_filename" conv=notrunc bs=512 count="$_blocks" 2>&1) | grep "dd:" || true | sed "s|^dd: ||"  # Ignore error from grep if nothing matched.
                            _status=$?
+                           if [ $_status -eq 0 ]; then
+                              mv "$_scratch" "$_filename" 2>&1 >/dev/null | sed "1s|^mv: |$0: |"  # Replace the original file with the temporary copy.
+                              _status=$?
+                           fi
+                        else
+                           _status=1
+                           error "cannot stat '$_scratch': No such file or directory"
                         fi
-                     else
-                        _status=1
-                        error "cannot stat '$_scratch': No such file or directory"
                      fi
                   fi
+                  if [ -n "$_scratch" ] && [ -f "$_scratch" ]; then  # Remove temporary file if it exists.
+                     rm -f "$_scratch" 2>&1 >/dev/null | sed "1s|^rm: |$0: |" 
+                  fi
                fi
-               if [ -n "$_scratch" ] && [ -f "$_scratch" ]; then  # Remove temporary file if it exists.
-                  rm -f "$_scratch" 2>&1 >/dev/null | sed "1s|^rm: |$0: |" 
-               fi
+            else
+               (cat "$_filename" 2>&1 >&3 3>&- | sed "1s|^cat: |$0: |" >&2 3>&-) 3>&1 | \
+               (openssl enc $_options -k "$_password" $_mode 2>&1 >&3 3>&- | sed "1s|^|$0: |" | sed -n 1,2p | sed "s|error reading input file|& (is it plain text)|" >&2 3>&-) 3>&1 | cat  # Encrypt or decrypt file rewriting an error messages.
+               _status=$?
             fi
          else
             (cat 2>&1 >&3 3>&- | sed "1s|^cat: |$0: |" >&2 3>&-) 3>&1 | \
-            (openssl enc $_options -k "$_password" $_decrypt 2>&1 >&3 3>&- | sed "1s|^|\n$0: |" | sed -n 1,2p | sed "s|error reading input file|& (is it plain text)|" >&2 3>&-) 3>&1 | cat
+            (openssl enc $_options -k "$_password" $_mode 2>&1 >&3 3>&- | sed "1s|^|\n$0: |" | sed -n 1,2p | sed "s|error reading input file|& (is it plain text)|" >&2 3>&-) 3>&1 | cat  # Encrypt or decrypt stream rewriting an error messages.
             _status=$?
          fi
          ((_count++))
