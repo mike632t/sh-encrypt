@@ -54,12 +54,14 @@
 #  25 May 26         - Replaced while loop an counter with a for loop - MT
 #                    - Updated command line parser to allow multiple single
 #                      letter options to be combined - MT
+#              0.3   - Doesn't use bash arrays to hold arguments to improve 
+#                      compatibility with legacy systems - MT
 #
 #  ToDo              - 
 #                    
 #
 
-VERSION=0.2.0020
+VERSION=0.3.0024
 CONSOLE=1  # Force console output. 
 
 #
@@ -284,9 +286,18 @@ while [ $# -gt 0 ] && [ $_status -eq 0 ]; do  # Parse command line arguments.
       done
       shift
       ;;
-   *) # Append each argument to args[] (preserving quoted strings).
-      _args[$_count]="$1"
-      _count=$((_count+1)) 
+   *) # Append each argument (preserving quoted strings).
+#      _args[$_count]="$1"
+#      _count=$((_count+1)) 
+
+      if [ -z "$_args" ]; then
+         _args="$1"
+      else
+         # Note - Newline is part of string.
+         _args="$_args
+$1"
+      fi
+
       shift
       ;;
    esac
@@ -315,7 +326,12 @@ if [ $_status -eq 0 ]; then  # Check there were no errors on the command line.
       _status=1
       printf "\n"
    else
-      for _filename in "${_args[@]}"; do
+      #for _filename in "${_args[@]}"; do
+      # Note - Do not indent here document.
+      exec 3<<EOF
+$_args
+EOF
+      while IFS= read -r _filename <&3; do # Read arguments from file descriptor
          if [ "$_status" = 0 ]; then
             if [ -n "$_filename" ]; then
                if [ $_overwrite -eq 1 ]; then
@@ -360,6 +376,7 @@ if [ $_status -eq 0 ]; then  # Check there were no errors on the command line.
             fi
          fi
       done
+      exec 3>&-  # Close file descriptor. 
    fi
 fi
 
