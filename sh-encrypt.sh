@@ -51,6 +51,7 @@
 #                    - File size and temporary filename generation modified
 #                      to make them more portable - MT
 #  24 May 26         - Added hint to 'Bad decrypt' error message - MT
+#  25 May 26         - Replaced while loop an counter with a for loop - MT
 # 
 #
 #  ToDo              - 
@@ -270,51 +271,50 @@ if [ $_status -eq 0 ]; then  # Check there were no errors on the command line.
       _status=1
       printf "\n"
    else
-      _count=0
-      while [ $_count -lt ${#_args[@]} ] && [ "$_status" = 0 ]; do
-         _filename="${_args[$_count]}"
-         if [ -n "$_filename" ]; then
-            if [ $_overwrite -eq 1 ]; then
-               #_scratch=`mktemp` || _status=1  # Create a temporary file.
-               _scratch=$(mktemp "$_tmp/tmpfile.XXXXXX")  # Create a temporary file.
-               if [ "$_status" -eq 0 ]; then
-                  (cat "$_filename" 2>&1 >&3 3>&- | sed "1s|^cat: |$0: |" >&2 3>&-) 3>&1 | \
-                  (openssl enc $_options -k "$_password" $_mode 2>&1 >&3 3>&- | sed "1s|^|$0: |" | sed -n 1,2p | sed "s|error reading input file|& (is it plain text)|" | sed "s|bad decrypt|& (try legacy options)|" >&2 3>&-) 3>&1 | cat > "$_scratch"  # Encrypt or decrypt file rewriting an error messages.
-                  _status=$?
-                  if [ $_status -eq 0 ]; then
-                     if [ $_force -eq 1 ] || confirm "Overwrite existing file(s)"; then  # Confirm deletion of original file.
-                        _force=1  # Don't prompt again. 
-                        if [ -e $_scratch ]; then  # Check scratch file exists (don't overwrite the original if there is nothing to replace it!).
-                           #_blocks=$(($(ls -alis "$_filename" | cut -f 7 -d ' ')/ 512 + 1))  
-                           _filesize=`( wc -c < "$_filename" )`  # Simpler and more portable 
-                           _blocks=$(( (_filesize + 511) / 512 ))  # Arithmetic expression
-                           (dd if=/dev/urandom of="$_filename" conv=notrunc bs=512 count="$_blocks" 2>&1) | grep "dd:" || true | sed "s|^dd: ||"  # Ignore error from grep if nothing matched.
-                           _status=$?
-                           if [ $_status -eq 0 ]; then
-                              mv "$_scratch" "$_filename" 2>&1 >/dev/null | sed "1s|^mv: |$0: |"  # Replace the original file with the temporary copy.
+      for _filename in "${_args[@]}"; do
+         if [ "$_status" = 0 ]; then
+            if [ -n "$_filename" ]; then
+               if [ $_overwrite -eq 1 ]; then
+                  #_scratch=`mktemp` || _status=1  # Create a temporary file.
+                  _scratch=$(mktemp "$_tmp/tmpfile.XXXXXX")  # Create a temporary file.
+                  if [ "$_status" -eq 0 ]; then
+                     (cat "$_filename" 2>&1 >&3 3>&- | sed "1s|^cat: |$0: |" >&2 3>&-) 3>&1 | \
+                     (openssl enc $_options -k "$_password" $_mode 2>&1 >&3 3>&- | sed "1s|^|$0: |" | sed -n 1,2p | sed "s|error reading input file|& (is it plain text)|" | sed "s|bad decrypt|& (try legacy options)|" >&2 3>&-) 3>&1 | cat > "$_scratch"  # Encrypt or decrypt file rewriting an error messages.
+                     _status=$?
+                     if [ $_status -eq 0 ]; then
+                        if [ $_force -eq 1 ] || confirm "Overwrite existing file(s)"; then  # Confirm deletion of original file.
+                           _force=1  # Don't prompt again. 
+                           if [ -e $_scratch ]; then  # Check scratch file exists (don't overwrite the original if there is nothing to replace it!).
+                              #_blocks=$(($(ls -alis "$_filename" | cut -f 7 -d ' ')/ 512 + 1))  
+                              _filesize=`( wc -c < "$_filename" )`  # Simpler and more portable 
+                              _blocks=$(( (_filesize + 511) / 512 ))  # Arithmetic expression
+                              (dd if=/dev/urandom of="$_filename" conv=notrunc bs=512 count="$_blocks" 2>&1) | grep "dd:" || true | sed "s|^dd: ||"  # Ignore error from grep if nothing matched.
                               _status=$?
+                              if [ $_status -eq 0 ]; then
+                                 mv "$_scratch" "$_filename" 2>&1 >/dev/null | sed "1s|^mv: |$0: |"  # Replace the original file with the temporary copy.
+                                 _status=$?
+                              fi
+                           else
+                              _status=1
+                              error "cannot stat '$_scratch': No such file or directory"
                            fi
-                        else
-                           _status=1
-                           error "cannot stat '$_scratch': No such file or directory"
                         fi
                      fi
+                     if [ -n "$_scratch" ] && [ -f "$_scratch" ]; then  # Remove temporary file if it exists.
+                        rm -f "$_scratch" 2>&1 >/dev/null | sed "1s|^rm: |$0: |" 
+                     fi
                   fi
-                  if [ -n "$_scratch" ] && [ -f "$_scratch" ]; then  # Remove temporary file if it exists.
-                     rm -f "$_scratch" 2>&1 >/dev/null | sed "1s|^rm: |$0: |" 
-                  fi
+               else
+                  (cat "$_filename" 2>&1 >&3 3>&- | sed "1s|^cat: |$0: |" >&2 3>&-) 3>&1 | \
+                  (openssl enc $_options -k "$_password" $_mode 2>&1 >&3 3>&- | sed "1s|^|$0: |" | sed -n 1,2p | sed "s|error reading input file|& (is it plain text)|" | sed "s|bad decrypt|& (try legacy options)|" >&2 3>&-) 3>&1 | cat  # Encrypt or decrypt file rewriting an error messages.
+                  _status=$?
                fi
             else
-               (cat "$_filename" 2>&1 >&3 3>&- | sed "1s|^cat: |$0: |" >&2 3>&-) 3>&1 | \
-               (openssl enc $_options -k "$_password" $_mode 2>&1 >&3 3>&- | sed "1s|^|$0: |" | sed -n 1,2p | sed "s|error reading input file|& (is it plain text)|" | sed "s|bad decrypt|& (try legacy options)|" >&2 3>&-) 3>&1 | cat  # Encrypt or decrypt file rewriting an error messages.
+               (cat 2>&1 >&3 3>&- | sed "1s|^cat: |$0: |" >&2 3>&-) 3>&1 | \
+               (openssl enc $_options -k "$_password" $_mode 2>&1 >&3 3>&- | sed "1s|^|\n$0: |" | sed -n 1,2p | sed "s|error reading input file|& (is it plain text)|" >&2 3>&-) 3>&1 | cat  # Encrypt or decrypt stream rewriting an error messages.
                _status=$?
             fi
-         else
-            (cat 2>&1 >&3 3>&- | sed "1s|^cat: |$0: |" >&2 3>&-) 3>&1 | \
-            (openssl enc $_options -k "$_password" $_mode 2>&1 >&3 3>&- | sed "1s|^|\n$0: |" | sed -n 1,2p | sed "s|error reading input file|& (is it plain text)|" >&2 3>&-) 3>&1 | cat  # Encrypt or decrypt stream rewriting an error messages.
-            _status=$?
          fi
-         ((_count++))
       done
    fi
 fi
