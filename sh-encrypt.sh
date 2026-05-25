@@ -52,7 +52,8 @@
 #                      to make them more portable - MT
 #  24 May 26         - Added hint to 'Bad decrypt' error message - MT
 #  25 May 26         - Replaced while loop an counter with a for loop - MT
-# 
+#                    - Updated command line parser to allow multiple single
+#                      letter options to be combined - MT
 #
 #  ToDo              - 
 #                    
@@ -140,7 +141,7 @@ inquire() {
 }
 
 #
-#  compare_versions REQUIRED CURRENT
+#  compare REQUIRED CURRENT
 #
 #  POSIX compliant.
 #
@@ -150,7 +151,7 @@ inquire() {
 #  version.
 #
 
-compare_versions() {
+compare() {
    _required=`printf "%s" "$1" | tr . ' '`  # Convert dots to spaces (so we can iterate over each number).
    _version=`printf "%s" "$2" | tr . ' '`
    set -- $_required  # Convert required version into positional parameters.
@@ -174,6 +175,40 @@ compare_versions() {
 }
 
 
+help() {
+   printf "Usage: $0 [OPTION]... [FILE...]\n"
+   printf "Encrypts FILES in place overwriting the existing file.\n\n"
+   printf "  -d, --decrypt            decrypt input file/stream\n"
+   printf "  -f, --force              overwrite without prompting\n"
+   printf "  -i, --inplace            modify file in place\n"
+   printf "  -l, --legacy             use legacy encryption settings\n"
+   printf "  -p, --password PASSWORD  specify password\n"
+   printf "      --legacy             use backward compatible settings\n"
+   printf "      --help               show this help and exit\n\n"
+   printf "      --version            show version and exit\n\n"
+   printf "Reads from stdin if no files specified and outputs to stdout.\n\n"
+}
+
+about() {
+   printf "%s: Version %s\n" $0 $VERSION
+   printf "Copyright(C) 2026 MT\n"
+   printf "License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\n"
+   printf "This is free software: you are free to change and redistribute it.\n"
+   printf "There is NO WARRANTY, to the extent permitted by law.\n"
+}
+
+password() {
+   case $2 in
+   -*|"")  # Blank or another qualifier.
+      error "password not specified."
+      _status=1
+      ;;
+   *)
+      _password="$2"
+      ;;
+   esac
+}
+      
 _status=0
 _count=0
 _overwrite=0
@@ -184,61 +219,70 @@ _mode="-e"  # Encrypt by default.
 _password=""
 _scratch=""
 _args=""
+_token=`printf '\377'`  # Use DEL to encode spaces in arguments. 
 
-while [ $# -gt 0 ] && [ $_status -eq 0 ]; do  # Scan command line arguments.
+while [ $# -gt 0 ] && [ $_status -eq 0 ]; do  # Parse command line arguments.
    case "$1" in
    --help)
-      printf "Usage: $0 [OPTION]... [FILE...]\n"
-      printf "Encrypts FILES in place overwriting the existing file.\n\n"
-      printf "  -d, --decrypt            decrypt input file/stream\n"
-      printf "  -f, --force              overwrite without prompting\n"
-      printf "  -i, --inplace            modify file in place\n"
-      printf "  -p, --password PASSWORD  specify password\n"
-      printf "      --legacy             use backward compatible settings\n"
-      printf "      --help               show this help and exit\n\n"
-      printf "      --version            show version and exit\n\n"
-      printf "Reads from stdin if no files specified and outputs to stdout.\n\n"
+      help
       _status=1
       ;;
-   --decrypt|-d)  # Select decryption option.
+   --decrypt)  # Select decryption option.
       _mode="-d"
-      shift 1
+      shift
       ;;
-   --force|-f)  # Select decryption option.
+   --force)  # Select decryption option.
       _force=1
-      shift 1
+      shift
       ;;
-   --inplace|-i)  # Overwrite existing file 
+   --inplace)  # Overwrite existing file 
       _overwrite=1
-      shift 1
+      shift
       ;;
-   --legacy)  # Select decryption option.
+   --legacy)  # Use backward compatible settings.
       _options="$_legacy"
-      shift 1
+      shift
       ;;
-   --version)  # Select decryption option.
-      printf "%s: Version %s\n" $0 $VERSION
-      printf "Copyright(C) 2026 MT\n"
-      printf "License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\n"
-      printf "This is free software: you are free to change and redistribute it.\n"
-      printf "There is NO WARRANTY, to the extent permitted by law.\n"
+   --version)  # Show version information.
+      about
       _status=1
       ;;
-   --password|-p)  # An example of an option with a parameter.
-      case $2 in
-      -*|"")  # Blank or another qualifier.
-         error "password not specified."
-         _status=1
-         ;;
-      *)
-         _password="$2"
-         shift 2
-         ;;
-      esac
+   --password)  # An option with a parameter.
+      password $1 $2
+      shift 2
       ;;
-   -*) # Unrecognized qualifier!
+   --*) # Unrecognized qualifier!
       error "unrecognized option '$1'\nTry '$0 --help' for more information."
       _status=1 
+      ;;
+   -*)
+      _option=`printf '%s\n' "$1" | sed 's/^-//'`  # Don't confuse with options.
+      while [ -n "$_option" ] && [ $_status -eq 0 ]; do
+         _next=`printf '%s\n' "$_option" | sed 's/^\(.\).*$/\1/'`
+         _option=`printf '%s\n' "$_option" | sed 's/^.\(.*\)$/\1/'`
+         case "$_next" in
+         d) _mode="-d"  # Decrypt
+            ;;
+         f) _force=1  # Do not prompt to overwrite (very dangerous particularly when decrypting as the encrypted file will be overwritten with gibberish if the password is wrong) 
+            ;;
+         i) _overwrite=1  # Overwrite existing file. 
+            ;;
+         l) _options="$_legacy"  # Use backward compatible settings.
+            ;;
+         p) if [ -n "$_option" ]; then  # Allows password specified in the option (e.g '-ppassword').
+               password "$1" "$_option"
+               _option=""
+            else
+               password "$1" "$2"
+               shift
+            fi
+            ;;
+         *) error "invalid option -- '$_next'\nTry '$0 --help' for more information."
+            _status=1 
+            ;;
+         esac
+      done
+      shift
       ;;
    *) # Append each argument to args[] (preserving quoted strings).
       _args[$_count]="$1"
@@ -250,7 +294,7 @@ done
 
 if [ $_status -eq 0 ]; then  # Check there were no errors on the command line.
    _version=$(openssl version | sed -n 's/[^0-9]*\([0-9]\{1,\}\(\.[0-9]\{1,\}\)\{1,\}\).*/\1/p')  # Get openssl version number.
-   if ! compare_versions 1.1.0 $_version; then  # Check openssl version meets requirements.
+   if ! compare 1.1.0 $_version; then  # Check openssl version meets requirements.
       _options="$_legacy"  # Use legacy options if it doesn't.
    fi
 
