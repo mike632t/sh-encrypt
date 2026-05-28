@@ -56,6 +56,7 @@
 #                      letter options to be combined - MT
 #              0.3   - Doesn't use bash arrays to hold arguments to improve 
 #                      compatibility with legacy systems - MT
+#  29 May 26         - Only display the first line of an error message - MT
 #
 #  ToDo              - 
 #                    
@@ -339,7 +340,7 @@ EOF
                   _scratch=$(mktemp "$_tmp/tmpfile.XXXXXX")  # Create a temporary file.
                   if [ "$_status" -eq 0 ]; then
                      (cat "$_filename" 2>&1 >&3 3>&- | sed "1s|^cat: |$0: |" >&2 3>&-) 3>&1 | \
-                     (openssl enc $_options -k "$_password" $_mode 2>&1 >&3 3>&- | sed "1s|^|$0: |" | sed -n 1,2p | sed "s|error reading input file|& (is it plain text)|" | sed "s|bad decrypt|& (try legacy options)|" >&2 3>&-) 3>&1 | cat > "$_scratch"  # Encrypt or decrypt file rewriting an error messages.
+                     (openssl enc $_options -k "$_password" $_mode 2>&1 >&3 3>&- | sed "1s|^|$0: |" | sed -n 1p | sed "s|error reading input file|& (is it plain text)|" | sed "s|bad decrypt|& (try legacy options)|" >&2 3>&-) 3>&1 | cat > "$_scratch"  # Encrypt or decrypt file rewriting an error messages.
                      _status=$?
                      if [ $_status -eq 0 ]; then
                         if [ $_force -eq 1 ] || confirm "Overwrite existing file(s)"; then  # Confirm deletion of original file.
@@ -366,12 +367,12 @@ EOF
                   fi
                else
                   (cat "$_filename" 2>&1 >&3 3>&- | sed "1s|^cat: |$0: |" >&2 3>&-) 3>&1 | \
-                  (openssl enc $_options -k "$_password" $_mode 2>&1 >&3 3>&- | sed "1s|^|$0: |" | sed -n 1,2p | sed "s|error reading input file|& (is it plain text)|" | sed "s|bad decrypt|& (try legacy options)|" >&2 3>&-) 3>&1 | cat  # Encrypt or decrypt file rewriting an error messages.
+                  (openssl enc $_options -k "$_password" $_mode 2>&1 >&3 3>&- | sed "1s|^|$0: |" | sed -n 1p | sed "s|error reading input file|& (is it plain text)|" | sed "s|bad decrypt|& (try legacy options)|" >&2 3>&-) 3>&1 | cat  # Encrypt or decrypt file rewriting an error messages.
                   _status=$?
                fi
             else
                (cat 2>&1 >&3 3>&- | sed "1s|^cat: |$0: |" >&2 3>&-) 3>&1 | \
-               (openssl enc $_options -k "$_password" $_mode 2>&1 >&3 3>&- | sed "1s|^|\n$0: |" | sed -n 1,2p | sed "s|error reading input file|& (is it plain text)|" >&2 3>&-) 3>&1 | cat  # Encrypt or decrypt stream rewriting an error messages.
+               (openssl enc $_options -k "$_password" $_mode 2>&1 >&3 3>&- | sed "1s|^|\n$0: |" | sed -n 1p | sed "s|error reading input file|& (is it plain text)|" >&2 3>&-) 3>&1 | cat  # Encrypt or decrypt stream rewriting an error messages.
                _status=$?
             fi
          fi
